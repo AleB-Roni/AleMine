@@ -28,7 +28,7 @@ import net.minecraft.world.phys.Vec3;
  * läuft dann in Schlangenlinien durch die Scheibe – jeweils Kopf- und Fußblock vor sich abbauen,
  * einen Schritt gehen, am Ende der Reihe drehen. Dann die nächste Scheibe.
  */
-public class MiningJob {
+public class MiningJob implements Task {
 
 	private enum Kind { MOVE, MINE, FALL }
 
@@ -126,14 +126,14 @@ public class MiningJob {
 		return right.getOpposite();
 	}
 
-	private static BlockPos cell(BlockPos o, Direction fwd, Direction right, int f, int r, int y) {
+	static BlockPos cell(BlockPos o, Direction fwd, Direction right, int f, int r, int y) {
 		return new BlockPos(
 				o.getX() + fwd.getStepX() * f + right.getStepX() * r,
 				y,
 				o.getZ() + fwd.getStepZ() * f + right.getStepZ() * r);
 	}
 
-	private static Direction horizontalFromYaw(float yaw) {
+	static Direction horizontalFromYaw(float yaw) {
 		int i = Math.floorMod(Math.round(yaw / 90f), 4);
 		return switch (i) {
 			case 0 -> Direction.SOUTH;
@@ -145,6 +145,7 @@ public class MiningJob {
 
 	// ------------------------------------------------------------------ Tick
 
+	@Override
 	public void tick(Minecraft mc) {
 		LocalPlayer p = mc.player;
 		ClientLevel level = mc.level;
@@ -227,7 +228,7 @@ public class MiningJob {
 		BlockState state = level.getBlockState(pos);
 
 		if (dangerousFluidNear(level, pos, step.digDown())) {
-			fail(mc, "Lava/Wasser neben " + pos.toShortString() + " – gestoppt.");
+			fail(mc, (AleMineConfig.stopOnWater ? "Lava/Wasser" : "Lava") + " neben " + pos.toShortString() + " – gestoppt.");
 			return;
 		}
 		if (step.digDown() && !solid(level, pos.below()) && !passable(level, pos)) {
@@ -320,7 +321,7 @@ public class MiningJob {
 
 	private static boolean isFluid(ClientLevel level, BlockPos pos) {
 		FluidState f = level.getFluidState(pos);
-		return !f.isEmpty() && (f.is(FluidTags.LAVA) || f.is(FluidTags.WATER));
+		return !f.isEmpty() && (f.is(FluidTags.LAVA) || (AleMineConfig.stopOnWater && f.is(FluidTags.WATER)));
 	}
 
 	private void nextStep(Minecraft mc) {
@@ -351,12 +352,14 @@ public class MiningJob {
 
 	// ------------------------------------------------------------------ Steuerung
 
+	@Override
 	public void cancel(Minecraft mc) {
 		releaseKeys(mc);
 		if (mc.gameMode != null) mc.gameMode.stopDestroyBlock();
 		finished = true;
 	}
 
+	@Override
 	public void togglePause(Minecraft mc) {
 		paused = !paused;
 		if (paused) {
@@ -366,10 +369,11 @@ public class MiningJob {
 		resetStep(mc);
 	}
 
-	public boolean isPaused() { return paused; }
-	public boolean isFinished() { return finished; }
+	@Override public boolean isPaused() { return paused; }
+	@Override public boolean isFinished() { return finished; }
 	public int totalBlocks() { return totalBlocks; }
 
+	@Override
 	public String statusText() {
 		// minedSteps zählt alle Abbau-Schritte (inkl. Kopfblöcke, die schon Luft waren)
 		int planned = Math.max(1, minedSteps + (int) steps.stream().filter(s -> s.kind() == Kind.MINE).count());
