@@ -5,7 +5,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.PauseScreen;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.HitResult;
@@ -47,7 +46,6 @@ public class XpFarmJob implements Task {
 		if (counter >= AleMineConfig.hitInterval && target != null) {
 			counter = 0;
 			mc.gameMode.attack(p, target);
-			p.swing(InteractionHand.MAIN_HAND);
 			hits++;
 		}
 
