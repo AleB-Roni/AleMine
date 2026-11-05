@@ -153,7 +153,7 @@ public class MiningJob {
 		if (paused) return;
 
 		// Andere Menüs (Inventar, Chat …) → kurz anhalten. Pausemenü (Alt-Tab) stört nicht.
-		if (mc.screen != null && !(mc.screen instanceof PauseScreen)) {
+		if (mc.gui.screen() != null && !(mc.gui.screen() instanceof PauseScreen)) {
 			releaseKeys(mc);
 			return;
 		}
