@@ -16,7 +16,7 @@ import org.lwjgl.sdl.SDLScancode;
 /**
  * AleMine – reiner Client-Mod.
  * Menü: Taste M oder /alemine menu
- * Befehle: /alemine start <länge> <breite> <tiefe> · /alemine xp · /alemine pause | stop | status
+ * Befehle: /alemine start <länge> <breite> <tiefe> · /alemine tunnel <l> <b> <höhe> · /alemine pos1|pos2|markiert|clear · /alemine xp · /alemine pause | stop | status
  * Tasten (änderbar unter Optionen → Steuerung → AleMine): M = Menü, K = Pause/Weiter, J = Stopp
  */
 public class AleMineClient implements ClientModInitializer {
@@ -26,6 +26,9 @@ public class AleMineClient implements ClientModInitializer {
 	private static KeyMapping menuKey;
 	private static KeyMapping pauseKey;
 	private static KeyMapping stopKey;
+	private static KeyMapping pos1Key;
+	private static KeyMapping pos2Key;
+	private static KeyMapping previewKey;
 	private static boolean openMenuNextTick = false;
 
 	@Override
@@ -36,12 +39,16 @@ public class AleMineClient implements ClientModInitializer {
 		menuKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.alemine.menu", SDLScancode.SDL_SCANCODE_M, category));
 		pauseKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.alemine.pause", SDLScancode.SDL_SCANCODE_K, category));
 		stopKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.alemine.stop", SDLScancode.SDL_SCANCODE_J, category));
+		pos1Key = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.alemine.pos1", SDLScancode.SDL_SCANCODE_COMMA, category));
+		pos2Key = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.alemine.pos2", SDLScancode.SDL_SCANCODE_PERIOD, category));
+		previewKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.alemine.preview", SDLScancode.SDL_SCANCODE_V, category));
+		Preview.register();
 
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, buildContext) -> dispatcher.register(
 				ClientCommands.literal("alemine")
 						.then(ClientCommands.literal("start")
 								.executes(ctx -> {
-									startMining(AleMineConfig.length, AleMineConfig.width, AleMineConfig.depth);
+									startPlanned();
 									return 1;
 								})
 								.then(ClientCommands.argument("laenge", IntegerArgumentType.integer(1, 128))
@@ -51,10 +58,41 @@ public class AleMineClient implements ClientModInitializer {
 															AleMineConfig.length = IntegerArgumentType.getInteger(ctx, "laenge");
 															AleMineConfig.width = IntegerArgumentType.getInteger(ctx, "breite");
 															AleMineConfig.depth = IntegerArgumentType.getInteger(ctx, "tiefe");
+															AleMineConfig.mineMode = Area.Mode.DOWN;
 															AleMineConfig.save();
-															startMining(AleMineConfig.length, AleMineConfig.width, AleMineConfig.depth);
+															startPlanned();
 															return 1;
 														})))))
+						.then(ClientCommands.literal("tunnel")
+								.then(ClientCommands.argument("laenge", IntegerArgumentType.integer(1, 128))
+										.then(ClientCommands.argument("breite", IntegerArgumentType.integer(1, 128))
+												.then(ClientCommands.argument("hoehe", IntegerArgumentType.integer(2, MiningJob.MAX_ABOVE_FEET + 1))
+														.executes(ctx -> {
+															AleMineConfig.length = IntegerArgumentType.getInteger(ctx, "laenge");
+															AleMineConfig.width = IntegerArgumentType.getInteger(ctx, "breite");
+															AleMineConfig.height = IntegerArgumentType.getInteger(ctx, "hoehe");
+															AleMineConfig.mineMode = Area.Mode.FORWARD;
+															AleMineConfig.save();
+															startPlanned();
+															return 1;
+														})))))
+						.then(ClientCommands.literal("pos1").executes(ctx -> {
+							Selection.set(1);
+							return 1;
+						}))
+						.then(ClientCommands.literal("pos2").executes(ctx -> {
+							Selection.set(2);
+							return 1;
+						}))
+						.then(ClientCommands.literal("markiert").executes(ctx -> {
+							AleMineConfig.mineMode = Area.Mode.MARKED;
+							startPlanned();
+							return 1;
+						}))
+						.then(ClientCommands.literal("clear").executes(ctx -> {
+							Selection.clear();
+							return 1;
+						}))
 						.then(ClientCommands.literal("xp").executes(ctx -> {
 							startXpFarm();
 							return 1;
@@ -76,7 +114,7 @@ public class AleMineClient implements ClientModInitializer {
 							return 1;
 						}))
 						.executes(ctx -> {
-							say("Menü: Taste M  ·  /alemine start <länge> <breite> <tiefe>  ·  /alemine xp  ·  /alemine pause | stop | status", ChatFormatting.YELLOW);
+							say("Menü: Taste M  ·  /alemine start <l> <b> <tiefe>  ·  /alemine tunnel <l> <b> <höhe>  ·  /alemine pos1 | pos2 | markiert | clear  ·  /alemine xp  ·  /alemine pause | stop | status", ChatFormatting.YELLOW);
 							return 1;
 						})));
 
@@ -90,6 +128,13 @@ public class AleMineClient implements ClientModInitializer {
 			}
 			while (pauseKey.consumeClick()) togglePause();
 			while (stopKey.consumeClick()) stop("Gestoppt.");
+			while (pos1Key.consumeClick()) Selection.set(1);
+			while (pos2Key.consumeClick()) Selection.set(2);
+			while (previewKey.consumeClick()) {
+				AleMineConfig.preview = !AleMineConfig.preview;
+				AleMineConfig.save();
+				say("Vorschau " + (AleMineConfig.preview ? "an" : "aus") + ".", ChatFormatting.GRAY);
+			}
 
 			if (job == null) return;
 			if (client.player == null || client.level == null || client.gameMode == null) {
@@ -101,13 +146,23 @@ public class AleMineClient implements ClientModInitializer {
 		});
 	}
 
-	public static void startMining(int length, int width, int depth) {
+	/** Startet den Bereich, den das Menü gerade zeigt (Runter / Nach vorne / Markiert). */
+	public static void startPlanned() {
 		Minecraft mc = Minecraft.getInstance();
 		if (mc.player == null) return;
+		Area area = Preview.plannedArea();
+		if (area == null) {
+			say("Erst Ecke 1 und Ecke 2 markieren (Tasten , und . oder /alemine pos1 / pos2).", ChatFormatting.YELLOW);
+			return;
+		}
+		MiningJob m = new MiningJob(mc, area);
+		if (m.error() != null) {
+			say(m.error(), ChatFormatting.YELLOW);
+			return;
+		}
 		if (job != null) job.cancel(mc);
-		MiningJob m = new MiningJob(mc, length, width, depth);
 		job = m;
-		say("Graben: " + length + " lang × " + width + " breit × " + depth + " tief. Pause: K · Stopp: J · Menü: M", ChatFormatting.GREEN);
+		say("Graben: " + area.sizeText() + " = " + area.volume() + " Blöcke. Pause: K · Stopp: J · Menü: M", ChatFormatting.GREEN);
 	}
 
 	public static void startXpFarm() {

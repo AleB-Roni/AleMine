@@ -2,5 +2,8 @@
   "key.category.alemine.alemine": "AleMine",
   "key.alemine.pause": "Pause / Resume",
   "key.alemine.stop": "Stop",
-  "key.alemine.menu": "Open menu"
+  "key.alemine.menu": "Open menu",
+  "key.alemine.pos1": "Set corner 1",
+  "key.alemine.pos2": "Set corner 2",
+  "key.alemine.preview": "Toggle preview"
 }

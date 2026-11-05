@@ -10,10 +10,15 @@ import net.fabricmc.loader.api.FabricLoader;
 
 /** Einstellungen – gespeichert in .minecraft/config/alemine.properties */
 public final class AleMineConfig {
+	public static Area.Mode mineMode = Area.Mode.DOWN;
 	public static int length = 8;
 	public static int width = 8;
 	public static int depth = 10;
+	public static int height = 3;          // für „Nach vorne“: 2–5
+	public static boolean leftSide = false; // Breite nach links statt rechts
 	public static boolean stopOnWater = true;
+	public static boolean bridgeGaps = true;
+	public static boolean preview = true;
 
 	/** Abstand zwischen zwei Schlägen in Ticks (20 = 1 Sekunde). Mind. 10, damit ein Rüstungsständer nicht kaputtgeht. */
 	public static int hitInterval = 20;
@@ -34,12 +39,20 @@ public final class AleMineConfig {
 		Properties p = new Properties();
 		try (Reader r = Files.newBufferedReader(f)) {
 			p.load(r);
+			try {
+				mineMode = Area.Mode.valueOf(p.getProperty("mineMode", mineMode.name()));
+			} catch (IllegalArgumentException ignored) {
+			}
 			length = clamp(intOf(p, "length", length), 1, 128);
 			width = clamp(intOf(p, "width", width), 1, 128);
 			depth = clamp(intOf(p, "depth", depth), 1, 320);
-			stopOnWater = Boolean.parseBoolean(p.getProperty("stopOnWater", String.valueOf(stopOnWater)));
+			height = clamp(intOf(p, "height", height), 2, MiningJob.MAX_ABOVE_FEET + 1);
+			leftSide = bool(p, "leftSide", leftSide);
+			stopOnWater = bool(p, "stopOnWater", stopOnWater);
+			bridgeGaps = bool(p, "bridgeGaps", bridgeGaps);
+			preview = bool(p, "preview", preview);
 			hitInterval = clamp(intOf(p, "hitInterval", hitInterval), MIN_HIT_INTERVAL, MAX_HIT_INTERVAL);
-			xpStopOnLowHealth = Boolean.parseBoolean(p.getProperty("xpStopOnLowHealth", String.valueOf(xpStopOnLowHealth)));
+			xpStopOnLowHealth = bool(p, "xpStopOnLowHealth", xpStopOnLowHealth);
 		} catch (Exception ignored) {
 			// kaputte Datei → Standardwerte
 		}
@@ -47,16 +60,25 @@ public final class AleMineConfig {
 
 	public static void save() {
 		Properties p = new Properties();
+		p.setProperty("mineMode", mineMode.name());
 		p.setProperty("length", String.valueOf(length));
 		p.setProperty("width", String.valueOf(width));
 		p.setProperty("depth", String.valueOf(depth));
+		p.setProperty("height", String.valueOf(height));
+		p.setProperty("leftSide", String.valueOf(leftSide));
 		p.setProperty("stopOnWater", String.valueOf(stopOnWater));
+		p.setProperty("bridgeGaps", String.valueOf(bridgeGaps));
+		p.setProperty("preview", String.valueOf(preview));
 		p.setProperty("hitInterval", String.valueOf(hitInterval));
 		p.setProperty("xpStopOnLowHealth", String.valueOf(xpStopOnLowHealth));
 		try (Writer w = Files.newBufferedWriter(file())) {
 			p.store(w, "AleMine Einstellungen");
 		} catch (Exception ignored) {
 		}
+	}
+
+	private static boolean bool(Properties p, String key, boolean def) {
+		return Boolean.parseBoolean(p.getProperty(key, String.valueOf(def)));
 	}
 
 	private static int intOf(Properties p, String key, int def) {
