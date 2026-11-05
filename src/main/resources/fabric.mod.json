@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "alemine",
+  "version": "${version}",
+  "name": "AleMine",
+  "description": "Client-Mod: gräbt automatisch einen Bereich aus – alle meine Blöcke. Auf dem Server muss nichts installiert werden.",
+  "authors": ["Roni"],
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["de.roni.alemine.AleMineClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.20.0",
+    "minecraft": "~26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
