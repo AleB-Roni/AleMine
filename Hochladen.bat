@@ -31,6 +31,7 @@ if errorlevel 1 (
   git remote add origin https://github.com/%GH_USER%/%REPO_NAME%.git
 )
 
+git pull -q --rebase --autostash origin main >nul 2>nul
 git update-index --chmod=+x gradlew >nul 2>nul
 git add -A
 git update-index --chmod=+x gradlew >nul 2>nul
