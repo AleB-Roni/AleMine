@@ -1,0 +1,21 @@
+name: inspect
+on: workflow_dispatch
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'microsoft'
+      - run: chmod +x ./gradlew && ./gradlew compileJava -q || true
+      - name: javap
+        run: |
+          JAR=$(find ~/.gradle -path "*minecraft*" -name "*.jar" -size +10M | grep -iv sources | head -5)
+          echo "$JAR"
+          J=$(echo "$JAR" | grep -i merged | head -1); [ -z "$J" ] && J=$(echo "$JAR" | head -1)
+          for c in net.minecraft.client.multiplayer.MultiPlayerGameMode net.minecraft.world.inventory.ContainerInput net.minecraft.world.inventory.Slot net.minecraft.world.inventory.AbstractContainerMenu net.minecraft.world.entity.player.Inventory net.minecraft.client.player.LocalPlayer net.minecraft.core.DefaultedRegistry net.minecraft.core.Registry net.minecraft.world.entity.LivingEntity; do
+            echo "##### $c"; javap -cp "$J" -public $c | grep -iE "click|input|close|slot|container|free|getValue|get\(|byName|getOptional|swing|QUICK|PICKUP|enum|class|items|getKey" | head -60
+          done
+          echo "##### Options keys"; javap -cp "$J" -public net.minecraft.client.Options | grep -E "KeyMapping key" | head -40
