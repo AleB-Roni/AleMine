@@ -29,6 +29,7 @@ public class AleMineClient implements ClientModInitializer {
 	private static KeyMapping pos1Key;
 	private static KeyMapping pos2Key;
 	private static KeyMapping previewKey;
+	private static KeyMapping chestKey;
 	private static boolean openMenuNextTick = false;
 
 	@Override
@@ -42,6 +43,7 @@ public class AleMineClient implements ClientModInitializer {
 		pos1Key = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.alemine.pos1", SDLScancode.SDL_SCANCODE_COMMA, category));
 		pos2Key = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.alemine.pos2", SDLScancode.SDL_SCANCODE_PERIOD, category));
 		previewKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.alemine.preview", SDLScancode.SDL_SCANCODE_V, category));
+		chestKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.alemine.chest", SDLScancode.SDL_SCANCODE_H, category));
 		Preview.register();
 
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, buildContext) -> dispatcher.register(
@@ -89,6 +91,14 @@ public class AleMineClient implements ClientModInitializer {
 							startPlanned();
 							return 1;
 						}))
+						.then(ClientCommands.literal("kiste").executes(ctx -> {
+							Storage.setChestFromAim();
+							return 1;
+						}))
+						.then(ClientCommands.literal("item").executes(ctx -> {
+							Storage.addHeldItem();
+							return 1;
+						}))
 						.then(ClientCommands.literal("clear").executes(ctx -> {
 							Selection.clear();
 							return 1;
@@ -114,7 +124,7 @@ public class AleMineClient implements ClientModInitializer {
 							return 1;
 						}))
 						.executes(ctx -> {
-							say("Menü: Taste M  ·  /alemine start <l> <b> <tiefe>  ·  /alemine tunnel <l> <b> <höhe>  ·  /alemine pos1 | pos2 | markiert | clear  ·  /alemine xp  ·  /alemine pause | stop | status", ChatFormatting.YELLOW);
+							say("Menü: Taste M  ·  /alemine start <l> <b> <tiefe>  ·  /alemine tunnel <l> <b> <höhe>  ·  /alemine pos1 | pos2 | markiert | clear  ·  /alemine kiste | item  ·  /alemine xp  ·  /alemine pause | stop | status", ChatFormatting.YELLOW);
 							return 1;
 						})));
 
@@ -128,6 +138,7 @@ public class AleMineClient implements ClientModInitializer {
 			}
 			while (pauseKey.consumeClick()) togglePause();
 			while (stopKey.consumeClick()) stop("Gestoppt.");
+			while (chestKey.consumeClick()) Storage.setChestFromAim();
 			while (pos1Key.consumeClick()) Selection.set(1);
 			while (pos2Key.consumeClick()) Selection.set(2);
 			while (previewKey.consumeClick()) {

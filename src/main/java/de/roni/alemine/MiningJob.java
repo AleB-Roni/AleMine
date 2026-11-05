@@ -8,6 +8,7 @@ import java.util.List;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.PauseScreen;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
@@ -16,6 +17,9 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.ContainerInput;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -38,10 +42,12 @@ import net.minecraft.world.phys.Vec3;
  */
 public class MiningJob implements Task {
 
-	private enum Kind { MOVE, MINE, FALL, PLACE }
+	private enum Kind { MOVE, MINE, FALL, PLACE, TOWER, DEPOSIT }
 
-	private record Step(Kind kind, BlockPos pos, Direction face, boolean digDown) {
-		Step(Kind kind, BlockPos pos, Direction face) { this(kind, pos, face, false); }
+	/** trip = Teil des Wegs zur Kiste und zurück (zählt nicht zur Spur). */
+	private record Step(Kind kind, BlockPos pos, Direction face, boolean digDown, boolean trip) {
+		Step(Kind kind, BlockPos pos, Direction face) { this(kind, pos, face, false, false); }
+		Step(Kind kind, BlockPos pos, Direction face, boolean digDown) { this(kind, pos, face, digDown, false); }
 	}
 
 	public static final int MAX_ABOVE_FEET = 4; // Fußhöhe + 4 = 5 Blöcke hoch
@@ -51,6 +57,8 @@ public class MiningJob implements Task {
 	private static final int MOVE_TIMEOUT = 20 * 6;
 	private static final int FALL_TIMEOUT = 20 * 4;
 	private static final int PLACE_TIMEOUT = 20 * 3;
+	private static final int TOWER_TIMEOUT = 20 * 3;   // pro Block nach oben
+	private static final int DEPOSIT_TIMEOUT = 20 * 5;
 	private static final double CENTER_EPS = 0.12;
 
 	private static final Item[] FILLER = {
@@ -68,6 +76,14 @@ public class MiningJob implements Task {
 	private boolean paused = false;
 	private boolean finished = false;
 	private BlockPos lastMineTarget = null;
+
+	// Einlagern
+	private BlockPos startPos;
+	private final List<BlockPos> trail = new ArrayList<>(); // Weg seit der Start-Spalte dieser Ebene
+	private boolean depositOn = false;
+	private int trips = 0;
+	private int towerBaseY = Integer.MIN_VALUE;
+	private int depositPhase = 0;
 
 	public MiningJob(Minecraft mc, Area area) {
 		this.area = area;
@@ -126,8 +142,15 @@ public class MiningJob implements Task {
 		int length = fwdIsX ? xLen : zLen;
 		int width = fwdIsX ? zLen : xLen;
 		BlockPos origin = new BlockPos(px, feet, pz);
+		startPos = origin;
+		trail.add(origin);
+		if (Storage.active()) {
+			depositOn = Storage.inReachFrom(origin);
+			if (!depositOn) AleMineClient.say("Kiste ist zu weit vom Startpunkt weg (max. 4 Blöcke) – Einlagern ist diesmal aus.", ChatFormatting.YELLOW);
+		}
 
 		int cf = 0, cr = 0;
+		int lowerLayers = Math.min(feet - 1, max.getY()) - min.getY() + 1;
 
 		// 1) Ebene(n) ab Fußhöhe nach oben
 		if (above) {
@@ -146,13 +169,13 @@ public class MiningJob implements Task {
 				steps.add(new Step(Kind.MOVE, cell(origin, fwd, side, next[0], next[1], feet), null));
 				prev = next;
 			}
-			cf = prev[0];
-			cr = prev[1];
+			// zurück in die Start-Spalte – dort geht's runter (und von dort zur Kiste)
+			if (lowerLayers > 0) walkBack(origin, fwd, side, prev[0], prev[1], feet);
 		}
 
-		// 2) Ebenen unter den Füßen – immer 2 auf einmal
+		// 2) Ebenen unter den Füßen – immer 2 auf einmal, jede Ebene beginnt in der Start-Spalte
 		int feetY = feet;
-		int remaining = Math.min(feet - 1, max.getY()) - min.getY() + 1;
+		int remaining = lowerLayers;
 		while (remaining > 0) {
 			int h = Math.min(2, remaining);
 			steps.add(new Step(Kind.MOVE, cell(origin, fwd, side, cf, cr, feetY), null));
@@ -173,10 +196,15 @@ public class MiningJob implements Task {
 				steps.add(new Step(Kind.MOVE, cell(origin, fwd, side, next[0], next[1], feetY), null));
 				prev = next;
 			}
-			cf = prev[0];
-			cr = prev[1];
+			if (remaining > 0) walkBack(origin, fwd, side, prev[0], prev[1], feetY);
 		}
 		return null;
+	}
+
+	/** Durch die (fertig abgebaute) Ebene zurück zur Zelle (0, 0). */
+	private void walkBack(BlockPos origin, Direction fwd, Direction side, int f, int r, int y) {
+		for (int rr = r - 1; rr >= 0; rr--) steps.add(new Step(Kind.MOVE, cell(origin, fwd, side, f, rr, y), null));
+		for (int ff = f - 1; ff >= 0; ff--) steps.add(new Step(Kind.MOVE, cell(origin, fwd, side, ff, 0, y), null));
 	}
 
 	/** Alle Zellen der Fläche als Schlangenlinie, beginnend in der Ecke (cf, cr). */
@@ -230,7 +258,9 @@ public class MiningJob implements Task {
 		if (paused || finished) return;
 
 		// Andere Menüs (Inventar, Chat …) → kurz anhalten. Pausemenü (Alt-Tab) und AleMine-Menü stören nicht.
-		if (mc.gui.screen() != null && !(mc.gui.screen() instanceof PauseScreen) && !(mc.gui.screen() instanceof AleMineScreen)) {
+		Step front = steps.peekFirst();
+		boolean depositing = front != null && front.kind() == Kind.DEPOSIT;
+		if (!depositing && mc.gui.screen() != null && !(mc.gui.screen() instanceof PauseScreen) && !(mc.gui.screen() instanceof AleMineScreen)) {
 			releaseKeys(mc);
 			return;
 		}
@@ -252,6 +282,8 @@ public class MiningJob implements Task {
 			case MINE -> tickMine(mc, p, level, step);
 			case FALL -> tickFall(mc, p, step);
 			case PLACE -> tickPlace(mc, p, level, step);
+			case TOWER -> tickTower(mc, p, level, step);
+			case DEPOSIT -> tickDeposit(mc, p, step);
 		}
 
 		if (tickCounter % 10 == 0 && !finished) {
@@ -297,6 +329,10 @@ public class MiningJob implements Task {
 		if (dist < CENTER_EPS) {
 			releaseKeys(mc);
 			nextStep();
+			if (!step.trip()) {
+				trail.add(target);
+				maybeReturnToChest(p);
+			}
 			return;
 		}
 		if (stepTicks > MOVE_TIMEOUT) {
@@ -358,6 +394,11 @@ public class MiningJob implements Task {
 		int expectY = step.pos().getY();
 		if (p.onGround() && p.getY() < expectY + 0.5) {
 			nextStep();
+			if (!step.trip()) {
+				trail.clear(); // neue Ebene, Start-Spalte
+				trail.add(step.pos());
+				maybeReturnToChest(p);
+			}
 			return;
 		}
 		if (stepTicks > FALL_TIMEOUT) {
@@ -393,6 +434,121 @@ public class MiningJob implements Task {
 			return;
 		}
 		fail(mc, "Kein Halt zum Block-Setzen bei " + target.toShortString() + " – gestoppt.");
+	}
+
+	// ------------------------------------------------------------------ Einlagern
+
+	private void maybeReturnToChest(LocalPlayer p) {
+		if (!depositOn || !Storage.inventoryFull(p) || !Storage.hasDepositables(p)) return;
+		BlockPos cur = trail.get(trail.size() - 1);
+		List<Step> seq = new ArrayList<>();
+		// 1) Spur rückwärts bis zur Start-Spalte dieser Ebene
+		for (int i = trail.size() - 2; i >= 0; i--) seq.add(new Step(Kind.MOVE, trail.get(i), null, false, true));
+		BlockPos column = trail.get(0);
+		int levels = startPos.getY() - column.getY();
+		// 2) Turm hoch bis zum Startpunkt
+		if (levels > 0) seq.add(new Step(Kind.TOWER, startPos, null, false, true));
+		// 3) Einlagern
+		seq.add(new Step(Kind.DEPOSIT, Storage.chest, null, false, true));
+		// 4) Turm wieder abbauen
+		for (int y = startPos.getY() - 1; y >= column.getY(); y--) {
+			BlockPos b = new BlockPos(column.getX(), y, column.getZ());
+			seq.add(new Step(Kind.MINE, b, Direction.UP, true, true));
+			seq.add(new Step(Kind.FALL, b, null, false, true));
+		}
+		// 5) Spur wieder vorwärts bis hierher
+		for (int i = 1; i < trail.size(); i++) seq.add(new Step(Kind.MOVE, trail.get(i), null, false, true));
+		for (int i = seq.size() - 1; i >= 0; i--) steps.addFirst(seq.get(i));
+		AleMineClient.say("Inventar voll – bringe alles zur Kiste" + (levels > 0 ? " (Turm " + levels + " hoch)" : "") + ".", ChatFormatting.AQUA);
+	}
+
+	/** Springt und setzt jeweils einen Block unter sich, bis die Füße auf step.pos().getY() sind. */
+	private void tickTower(Minecraft mc, LocalPlayer p, ClientLevel level, Step step) {
+		BlockPos me = p.blockPosition();
+		int target = step.pos().getY();
+		if (p.onGround() && me.getY() >= target) {
+			mc.options.keyJump.setDown(false);
+			nextStep();
+			return;
+		}
+		if (stepTicks > TOWER_TIMEOUT) {
+			mc.options.keyJump.setDown(false);
+			fail(mc, "Komme beim Turmbauen nicht hoch – gestoppt.");
+			return;
+		}
+		p.setXRot(90f);
+		if (p.onGround()) {
+			if (towerBaseY != Integer.MIN_VALUE && me.getY() > towerBaseY) stepTicks = 0; // ein Block geschafft
+			towerBaseY = me.getY();
+			if (!selectFiller(p)) {
+				fail(mc, "Keine Blöcke zum Turmbauen in der Hotbar – gestoppt.");
+				return;
+			}
+			mc.options.keyJump.setDown(true);
+		} else {
+			mc.options.keyJump.setDown(false);
+			BlockPos place = new BlockPos(me.getX(), towerBaseY, me.getZ());
+			if (towerBaseY != Integer.MIN_VALUE && p.getY() > towerBaseY + 1.05 && !solid(level, place)) {
+				BlockPos below = place.below();
+				Vec3 hit = Vec3.atCenterOf(below).add(0, 0.5, 0);
+				mc.gameMode.useItemOn(p, InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, below, false));
+			}
+		}
+	}
+
+	/** Kiste öffnen, ausgewählte Items reinschieben, Kiste schließen. */
+	private void tickDeposit(Minecraft mc, LocalPlayer p, Step step) {
+		BlockPos chest = step.pos();
+		if (stepTicks > DEPOSIT_TIMEOUT) {
+			if (p.containerMenu != p.inventoryMenu) p.closeContainer();
+			fail(mc, "Kiste bei " + chest.toShortString() + " ließ sich nicht benutzen – gestoppt.");
+			return;
+		}
+		switch (depositPhase) {
+			case 0 -> { // öffnen
+				if (mc.gui.screen() instanceof AbstractContainerScreen<?> && p.containerMenu != p.inventoryMenu) {
+					depositPhase = 1;
+					return;
+				}
+				if (stepTicks % 10 == 1) {
+					Vec3 hit = Vec3.atCenterOf(chest).add(0, 0.5, 0);
+					lookAt(p, hit);
+					mc.gameMode.useItemOn(p, InteractionHand.MAIN_HAND, new BlockHitResult(hit, Direction.UP, chest, false));
+				}
+			}
+			case 1 -> { // reinschieben (Shift-Klick)
+				AbstractContainerMenu menu = p.containerMenu;
+				int keep = Storage.keepSlot(p);
+				for (int i = 0; i < menu.slots.size(); i++) {
+					Slot s = menu.slots.get(i);
+					if (s.container != p.getInventory()) continue;
+					int inv = s.getContainerSlot();
+					if (inv >= 36 || inv == keep) continue;
+					if (Storage.shouldDeposit(s.getItem())) {
+						mc.gameMode.handleContainerInput(menu.containerId, i, 0, ContainerInput.QUICK_MOVE, p);
+					}
+				}
+				depositPhase = 2;
+				stepTicks = 0;
+			}
+			default -> { // kurz warten, dann prüfen und schließen
+				if (stepTicks < 10) return;
+				int free = freeSlots(p);
+				p.closeContainer();
+				trips++;
+				if (free < 3) {
+					fail(mc, "Die Kiste ist voll – gestoppt.");
+					return;
+				}
+				nextStep();
+			}
+		}
+	}
+
+	private static int freeSlots(LocalPlayer p) {
+		int n = 0;
+		for (int i = 0; i < 36; i++) if (p.getInventory().getItem(i).isEmpty()) n++;
+		return n;
 	}
 
 	// ------------------------------------------------------------------ Hilfen
@@ -432,11 +588,7 @@ public class MiningJob implements Task {
 		// … sonst irgendein voller, nicht fallender Block ohne Inhalt (keine Truhen o. Ä.)
 		if (slot < 0) {
 			for (int i = 0; i < 9; i++) {
-				ItemStack s = inv.getItem(i);
-				if (s.getItem() instanceof BlockItem bi) {
-					Block b = bi.getBlock();
-					if (b instanceof FallingBlock || b instanceof EntityBlock) continue;
-					if (!b.defaultBlockState().isCollisionShapeFullBlock(p.level(), BlockPos.ZERO)) continue;
+				if (isFiller(p, inv.getItem(i))) {
 					slot = i;
 					break;
 				}
@@ -445,6 +597,14 @@ public class MiningJob implements Task {
 		if (slot < 0) return false;
 		if (inv.getSelectedSlot() != slot) inv.setSelectedSlot(slot);
 		return true;
+	}
+
+	/** Taugt der Stack zum Lückenfüllen / Turmbauen? */
+	static boolean isFiller(LocalPlayer p, ItemStack s) {
+		if (s.isEmpty() || !(s.getItem() instanceof BlockItem bi)) return false;
+		Block b = bi.getBlock();
+		if (b instanceof FallingBlock || b instanceof EntityBlock) return false;
+		return b.defaultBlockState().isCollisionShapeFullBlock(p.level(), BlockPos.ZERO);
 	}
 
 	private static void lookAt(LocalPlayer p, Vec3 target) {
@@ -490,11 +650,14 @@ public class MiningJob implements Task {
 	private void resetStep() {
 		stepTicks = 0;
 		lastMineTarget = null;
+		towerBaseY = Integer.MIN_VALUE;
+		depositPhase = 0;
 	}
 
 	private static void releaseKeys(Minecraft mc) {
 		mc.options.keyUp.setDown(false);
 		mc.options.keyShift.setDown(false);
+		mc.options.keyJump.setDown(false);
 	}
 
 	private void done(Minecraft mc) {
@@ -535,6 +698,7 @@ public class MiningJob implements Task {
 		int planned = Math.max(1, minedSteps + (int) steps.stream().filter(s -> s.kind() == Kind.MINE).count());
 		int pct = Math.min(100, minedSteps * 100 / planned);
 		return pct + "% · noch " + steps.size() + " Schritte" + (placed > 0 ? " · " + placed + " Lücken gefüllt" : "")
+				+ (trips > 0 ? " · " + trips + "× eingelagert" : "") + (depositOn ? "" : "")
 				+ (paused ? " · PAUSE" : "");
 	}
 }

@@ -17,6 +17,7 @@ public final class Preview {
 	private static final int POS1 = ARGB.color(255, 85, 255, 255);   // türkis
 	private static final int POS2 = ARGB.color(255, 255, 85, 255);   // pink
 	private static final int TARGET = ARGB.color(255, 255, 60, 60);  // rot
+	private static final int CHEST = ARGB.color(255, 255, 255, 85);  // gelb
 
 	private Preview() {}
 
@@ -36,6 +37,10 @@ public final class Preview {
 	private static void emit() {
 		Minecraft mc = Minecraft.getInstance();
 		if (mc.player == null) return;
+
+		if (Storage.chest != null && (AleMineConfig.preview || mc.gui.screen() instanceof AleMineScreen || AleMineClient.job instanceof MiningJob)) {
+			box(new AABB(Storage.chest).inflate(0.03), CHEST, 2f);
+		}
 
 		if (AleMineClient.job instanceof MiningJob job) {
 			box(job.area().toAabb(), RUNNING, 3f);

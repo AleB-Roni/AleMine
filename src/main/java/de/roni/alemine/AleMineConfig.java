@@ -53,6 +53,9 @@ public final class AleMineConfig {
 			preview = bool(p, "preview", preview);
 			hitInterval = clamp(intOf(p, "hitInterval", hitInterval), MIN_HIT_INTERVAL, MAX_HIT_INTERVAL);
 			xpStopOnLowHealth = bool(p, "xpStopOnLowHealth", xpStopOnLowHealth);
+			Storage.enabled = bool(p, "depositEnabled", Storage.enabled);
+			Storage.chestFromString(p.getProperty("chest", ""));
+			Storage.itemsFromString(p.getProperty("depositItems", ""));
 		} catch (Exception ignored) {
 			// kaputte Datei → Standardwerte
 		}
@@ -71,6 +74,9 @@ public final class AleMineConfig {
 		p.setProperty("preview", String.valueOf(preview));
 		p.setProperty("hitInterval", String.valueOf(hitInterval));
 		p.setProperty("xpStopOnLowHealth", String.valueOf(xpStopOnLowHealth));
+		p.setProperty("depositEnabled", String.valueOf(Storage.enabled));
+		p.setProperty("chest", Storage.chestString());
+		p.setProperty("depositItems", Storage.itemsString());
 		try (Writer w = Files.newBufferedWriter(file())) {
 			p.store(w, "AleMine Einstellungen");
 		} catch (Exception ignored) {

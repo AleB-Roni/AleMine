@@ -19,7 +19,7 @@ import net.minecraft.world.entity.Entity;
  */
 public class AleMineScreen extends Screen {
 
-	public enum Tab { MINE, XP }
+	public enum Tab { MINE, CHEST, XP }
 
 	private static final int WHITE = 0xFFFFFFFF;
 	private static final int GRAY = 0xFFBBBBBB;
@@ -54,21 +54,27 @@ public class AleMineScreen extends Screen {
 		rowY0 = top + 60;
 
 		Button mineTab = addRenderableWidget(Button.builder(Component.literal("⛏ Graben"), b -> reopen(Tab.MINE))
-				.pos(cx - 102, top + 12).size(100, 20).build());
+				.pos(cx - 102, top + 12).size(66, 20).build());
+		Button chestTab = addRenderableWidget(Button.builder(Component.literal("▤ Kiste"), b -> reopen(Tab.CHEST))
+				.pos(cx - 33, top + 12).size(66, 20).build());
 		Button xpTab = addRenderableWidget(Button.builder(Component.literal("⚔ XP-Farm"), b -> reopen(Tab.XP))
-				.pos(cx + 2, top + 12).size(100, 20).build());
+				.pos(cx + 36, top + 12).size(66, 20).build());
 		mineTab.active = tab != Tab.MINE;
+		chestTab.active = tab != Tab.CHEST;
 		xpTab.active = tab != Tab.XP;
 
-		if (tab == Tab.MINE) initMine(cx);
-		else initXp(cx);
+		switch (tab) {
+			case MINE -> initMine(cx);
+			case CHEST -> initChest(cx);
+			case XP -> initXp(cx);
+		}
 
 		int by = this.height - 26;
 		addRenderableWidget(Button.builder(Component.literal("▶ Start"), b -> {
 					AleMineConfig.save();
 					this.onClose();
-					if (tab == Tab.MINE) AleMineClient.startPlanned();
-					else AleMineClient.startXpFarm();
+					if (tab == Tab.XP) AleMineClient.startXpFarm();
+					else AleMineClient.startPlanned();
 				})
 				.pos(cx - 154, by).size(74, 20).build());
 		addRenderableWidget(Button.builder(Component.literal("⏸ Pause"), b -> AleMineClient.togglePause())
@@ -130,6 +136,29 @@ public class AleMineScreen extends Screen {
 			toggle(cx + 2, ty + 22, () -> "Vorschau: " + (AleMineConfig.preview ? "An" : "Aus"),
 					() -> AleMineConfig.preview = !AleMineConfig.preview);
 		}
+	}
+
+	private void initChest(int cx) {
+		int y = top + 36;
+		addRenderableWidget(Button.builder(Component.literal("Kiste = angeschaut"), b -> {
+			Storage.setChestFromAim();
+			reopen(Tab.CHEST);
+		}).pos(cx - 100, y).size(98, 20).build());
+		addRenderableWidget(Button.builder(Component.literal("Einlagern: " + (Storage.enabled ? "An" : "Aus")), b -> {
+			Storage.enabled = !Storage.enabled;
+			AleMineConfig.save();
+			reopen(Tab.CHEST);
+		}).pos(cx + 2, y).size(98, 20).build());
+		addRenderableWidget(Button.builder(Component.literal("+/− Item in der Hand"), b -> {
+			Storage.addHeldItem();
+			reopen(Tab.CHEST);
+		}).tooltip(Tooltip.create(Component.literal("Nimm ein Item in die Hand und klick hier. Nochmal klicken entfernt es wieder.")))
+				.pos(cx - 100, y + 22).size(98, 20).build());
+		addRenderableWidget(Button.builder(Component.literal("Liste leeren"), b -> {
+			Storage.items.clear();
+			AleMineConfig.save();
+			reopen(Tab.CHEST);
+		}).pos(cx + 2, y + 22).size(98, 20).build());
 	}
 
 	private void initXp(int cx) {
@@ -195,8 +224,11 @@ public class AleMineScreen extends Screen {
 		int labelX = cx - 150;
 		g.centeredText(this.font, "AleMine – alle meine Blöcke", cx, top, GOLD);
 
-		if (tab == Tab.MINE) drawMine(g, cx, labelX);
-		else drawXp(g, cx, labelX);
+		switch (tab) {
+			case MINE -> drawMine(g, cx, labelX);
+			case CHEST -> drawChest(g, cx);
+			case XP -> drawXp(g, cx, labelX);
+		}
 
 		Task job = AleMineClient.job;
 		String status = job == null ? "Kein Auftrag aktiv." : "Läuft: " + job.statusText();
@@ -256,6 +288,53 @@ public class AleMineScreen extends Screen {
 			g.centeredText(this.font, "✔ Startklar · Blick nach " + dirName(fwd) + " · orange = wird abgebaut", cx, y, GREEN);
 		} else {
 			g.centeredText(this.font, "✖ " + err, cx, y, YELLOW);
+		}
+	}
+
+	private void drawChest(GuiGraphicsExtractor g, int cx) {
+		int y = top + 84;
+		if (Storage.chest == null) {
+			g.centeredText(this.font, "Noch keine Kiste – Kiste anschauen und H drücken (oder Knopf oben).", cx, y, YELLOW);
+		} else {
+			String name = this.minecraft != null && this.minecraft.level != null
+					? this.minecraft.level.getBlockState(Storage.chest).getBlock().getName().getString() : "";
+			g.centeredText(this.font, "Kiste: " + Storage.chest.toShortString() + " (" + name + ")", cx, y, AQUA);
+		}
+		y += 14;
+		if (Storage.items.isEmpty()) {
+			g.centeredText(this.font, "Liste leer → alle Blöcke werden eingelagert", cx, y, WHITE);
+			y += 11;
+		} else {
+			g.centeredText(this.font, "Wird eingelagert:", cx, y, WHITE);
+			y += 11;
+			int shown = 0;
+			StringBuilder line = new StringBuilder();
+			for (String id : Storage.items) {
+				String n = Storage.nameOf(id);
+				if (line.length() + n.length() > 48) {
+					g.centeredText(this.font, line.toString(), cx, y, GOLD);
+					y += 10;
+					line.setLength(0);
+					if (++shown >= 5) break;
+				}
+				if (!line.isEmpty()) line.append(", ");
+				line.append(n);
+			}
+			if (!line.isEmpty() && shown < 5) {
+				g.centeredText(this.font, line.toString(), cx, y, GOLD);
+				y += 10;
+			}
+		}
+		y += 6;
+		g.centeredText(this.font, "Werkzeuge, Essen und 1 Stapel Füllblöcke (Hotbar) bleiben immer.", cx, y, GRAY);
+		y += 11;
+		g.centeredText(this.font, "Inventar voll → Spur zurück, ggf. Turm hoch, einlagern, weiter.", cx, y, GRAY);
+		y += 11;
+		LocalPlayer p = this.minecraft == null ? null : this.minecraft.player;
+		if (p != null && Storage.chest != null) {
+			boolean ok = Storage.inReachFrom(p.blockPosition());
+			g.centeredText(this.font, ok ? "✔ Von hier aus erreichbar – hier starten." : "✖ Von hier zu weit weg: Start muss max. 4 Blöcke von der Kiste sein.",
+					cx, y, ok ? GREEN : YELLOW);
 		}
 	}
 
